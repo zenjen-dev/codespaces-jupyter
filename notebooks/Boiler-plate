@@ -75,7 +75,7 @@ class RenameFiles(Node):
         no_changes = True
 
         # Location of csv files
-        path = r'C:\temp\jen\Jen_Analytics_Projects\power_bi'
+        path = r'C:\temp\user\User_Analytics_Projects\power_bi\\'
 
         # Delete previous datafiles
         for f in glob.glob(path + 'data*.csv'):
@@ -83,8 +83,8 @@ class RenameFiles(Node):
 
         # Rename csv file
         # old_name = path + 'SAP_Data.csv'
-        old_name = r'C:\temp\user\User_Analytics_Projects\power_bi\abc_data.csv'
-        new_name = r'C:\temp\user\User_Analytics_Projects\power_bi\datafile1.csv'
+        old_name = path + 'repair_sentencing_data.csv'
+        new_name = path + 'datafile1.csv'
 
         if os.path.isfile(new_name):
             print("The file already exists")
