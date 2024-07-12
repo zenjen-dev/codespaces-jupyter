@@ -1,2 +1,96 @@
-testing
+import sqlite3
+import easy_shell
+import rowmap as rm
+from loguru import logger
+from rowmap.io_methods.access import sqlite_currency
+from flashtext import KeywordProcessor
+from sqlalchemy.event import listen
+from sqlalchemy.pool import Pool
+# other packages for SAP, i.e. cake
+import re
+import pandas as pd
+import os, glob, shutil
+from collections import defaultdict
 
+from cake.database import (
+    to_db,
+    files_to_load,
+    DBConnectionRepo,
+    DBSchemaRepo
+)
+from cake.nodes.database import (
+    DBSchemaNode,
+    DBFileExportNode,
+    DBDelimitedFileLoaderNode,
+    DBTransactionNode
+)
+def my_on_connect(dbapi_con, connection_record):
+    dbapi_con.create_function(*sqlite_currency.ROUND_FIXED_FUNCTION)
+    dbapi_con.create_function(*sqlite_currency.RESCALE_FUNCTION)
+
+data = RelativeDir.beside(__file__, 'data')
+databases = RelativeDir.beside(__file__, 'databases')
+loaded = RelativeDir.beside(__file__, 'loaded')
+power_bi = RelativeDir.beside(__file__, 'power_bi')
+error = RelativeDir.beside(__file__, 'error')
+sqlite3.register_converter(*sqlite_currency.CURRENCY_DECIMAL_CONVERTER)
+listen(Pool, 'connect', my_on_connect)
+
+DBSchemaRepo.add('''
+### schema code here
+''')
+
+DBConnectionRepo.override(
+   ## d/b connection config       
+    },
+)
+
+SemaphoreRepo.override(
+    sqlite_workers = 8,
+    worker = 1
+)
+
+class CreateDatabaseSchema(DBSchemaNode):
+    '''
+    Create the tables defined in the DBSchemaRepo
+    '''
+    
+    connection = 'liftsystem'
+    action = 'recreate'
+
+class RenameFiles(Node):
+    '''
+    Delete existing datafiles, and rename SAP_Data file
+    '''
+    
+    dependencies = [        
+        CreateDatabaseSchema
+    ]
+
+    semaphores = [
+        'sqlite_workers'
+    ]
+    
+    def run(self, inputs):  
+        no_changes = True
+
+        # Location of csv files
+        path = 'C:/Legacy-D-Drive/Current_Data/Informatics/ABC Repairs/power_bi/files_to_merge/'
+
+        # Delete previous datafiles
+        for f in glob.glob(path + 'data*.csv'):
+            os.remove(f)
+
+        # Rename csv file
+        # old_name = path + 'SAP_Data.csv'
+        old_name = path + 'abc_data.csv'
+        new_name = path + 'datafile1.csv'
+
+        if os.path.isfile(new_name):
+            print("The file already exists")
+        else:
+            # Rename the file
+            os.rename(old_name, new_name)  
+            no_changes = False     
+
+        return None, no_changes
