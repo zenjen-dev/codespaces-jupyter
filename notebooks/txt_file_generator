@@ -1,34 +1,54 @@
+# *** IMPORT LIBS ***
+from lxml import etree
+import os
 import pandas as pd
 
-def read_excel_file(file_path, sheet_name, header_row):
-    return pd.read_excel(file_path, sheet_name=sheet_name, header=header_row-1)
-
-def transform_data(df):
-    df.rename(columns={'FLCN': 'bom_FLCN'}, inplace=True)
-    df = df[df['SN'] != 0]
-    df = df.astype(str)
+def read_excel_data(file_path, sheet_name, start_row_num):
+    df = pd.read_excel(file_path, sheet_name=sheet_name, header=start_row_num-1)
     return df
 
-def merge_dataframes(df1, df2, how, left_on, right_on):
-    return pd.merge(df1, df2, how=how, left_on=left_on, right_on=right_on)
+def transform_df_bom(df_bom):
+    df_bom.rename(columns={'FLCN': 'bom_FLCN'}, inplace=True)
+    df_bom = df_bom[df_bom['SN'] != 0]
+    df_bom = df_bom.astype(str)
+    return df_bom
 
-def create_mapping_dict(df, index_col, value_col):
-    return df.drop_duplicates(index_col).set_index(index_col)[value_col].to_dict()
+def read_in_master_uin_lcn_mapping(file_path2):
+    df_map = pd.read_excel(file_path2)
+    df_map = df_map.astype(str)
+    df_map = df_map[df_map['model'] == 'MODULE']
+    return df_map
 
-def post_process_data(df):
-    df['uin'] = df['uin'].str.replace('-', '')
-    df_load = df.groupby('SN').first().reset_index()
+def join_bom_to_mapping(df_bom, df_map):
+    df_bom = pd.merge(df_bom, df_map, how='left', left_on='PN', right_on='part_number')
+    return df_bom
+
+def read_in_master_reference(file_path3):
+    df_master = pd.read_excel(file_path3)
+    df_master = df_master.astype(str)
+    return df_master
+
+def merge_master_reference(df_bom, df_master):
+    df_bom['uin'] = df_bom['uin'].str.replace('-', '')
+    df_bom = pd.merge(df_bom, df_master, how='left', left_on=['uin'], right_on=['UIN'])
+    return df_bom
+
+def group_and_map(df_bom):
+    df_load = df_bom.groupby('SN').first().reset_index()
+    mapping_dict1 = df_load.drop_duplicates('uin').set_index('uin')['PN'].to_dict()
+    df_load['parent_PN'] = df_load['ParentLCN'].map(mapping_dict1).fillna('')
+    mapping_dict2 = df_load.drop_duplicates('uin').set_index('uin')['SN'].to_dict()
+    df_load['parent_SN'] = df_load['ParentLCN'].map(mapping_dict2).fillna('')
+    df_load = df_load.dropna(subset=['uin'])
+    df_load['uin'] = df_load['uin'].apply(lambda x: x[:1] + '-' + x[1:3] + '-' + x[3:6] + '-' + x[6:])
+    df_load[['Chapter', 'UINSection', 'UINFigure', 'UINItem']] = df_load['uin'].str.split('-', expand=True)
     return df_load
 
-def split_uin_assign_build_level(df):
-    df[['Chapter', 'UINSection', 'UINFigure', 'UINItem']] = df['uin'].str.split('-', expand=True)
-    df = assign_build_level(df)
-    return df
-
-def assign_build_level(df):
+def assign_build_level(df_load):
     build_level = 1
     build_levels = []
-    for i, row in df.iterrows():
+
+    for i, row in df_load.iterrows():
         if i == 0:
             build_levels.append(build_level)
         else:
@@ -37,25 +57,35 @@ def assign_build_level(df):
             elif build_level != 3:
                 build_level = 2
             build_levels.append(build_level)
-    df['build_level'] = build_levels
-    return df
 
-def convert_dataframe_to_text(df, output_filename):
-    output_lines = []
-    # Conversion logic here
-    with open(output_filename, "w") as file:
-        file.write("\n".join(output_lines))
+    df_load['build_level'] = build_levels
+    return df_load
 
-# Example usage
-file_path = 'path_to_your_excel_file.xlsx'
+# *** MAIN EXECUTION FLOW ***
+file_path = 'Datasources.xlsx'
 sheet_name = 'Datasources'
 start_row_num = 3
 
-df_bom = read_excel_file(file_path, sheet_name, start_row_num)
-df_bom = transform_data(df_bom)
+df_bom = read_excel_data(file_path, sheet_name, start_row_num)
+df_bom = transform_df_bom(df_bom)
 
-# Continue with the rest of the operations using the defined functions
+file_path2 = 'UIN_Reference/Complete_UIN_LCN_Mapping.xlsx'
+df_map = read_in_master_uin_lcn_mapping(file_path2)
 
+df_bom = join_bom_to_mapping(df_bom, df_map)
+
+file_path3 = './MDR Tool/CouldBuild_Reference_Files/Master_CouldBuild_MODULE.xlsx'
+df_master = read_in_master_reference(file_path3)
+
+df_bom = merge_master_reference(df_bom, df_master)
+
+df_load = group_and_map(df_bom)
+df_load = assign_build_level(df_load)
+
+df_load = df_load.fillna('')
+
+# Leave convert_dataframe_to_text3 function as is
+output_lines = convert_dataframe_to_text3(df_load)
 
 with open("LOADFILE_{EI_SERIAL_NUMBER}_OUTPUT.txt", "w") as file:
-  file.write("\n".join(output_lines))
+    file.write("\n".join(output_lines))
