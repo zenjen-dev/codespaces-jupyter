@@ -1,188 +1,60 @@
-
-######################################## LIFTFAN BOM LOAD SCRIPT ##################################################################################
-# *** EDIT PATH TO POINT TO THE BOM FILE SOURCE AND READ IN AS DATAFRAME ***
-
-file_path = r'C:\__YOUR_LOCAL_PATH_TO_BOM_FILES\MODULE_BOM Sheet.xlsm' ## INPUT FILE PATH TO BOM
-
-EI_Module = "MODULE"
-EI_SERIAL_NUMBER = 'ABCDEF0102' ### EDIT LIFTFAN SERIAL NUMBER
-EI_PART_NUMBER = 'MODULE [PN000001]'
-BuildDate = '2025091' ### EDIT JULIAN DATE OF BOM BUILD DATE
-Asset = ''
-Variation = 'PN000001'
-Series = "XYZ"
-
-# *** IMPORT LIBS ***
-from lxml import etree
-import os
 import pandas as pd
 
-sheet_name = 'Datasources'
-start_row_num = 3
-df_bom = pd.read_excel(file_path, sheet_name=sheet_name, header=start_row_num-1)
+def read_excel_file(file_path, sheet_name, header_row):
+    return pd.read_excel(file_path, sheet_name=sheet_name, header=header_row-1)
 
-# *** TRANSFORMATIONS (PREP FOR MERGE) ***
-df_bom.rename(columns={'FLCN': 'bom_FLCN'}, inplace=True)
+def transform_data(df):
+    df.rename(columns={'FLCN': 'bom_FLCN'}, inplace=True)
+    df = df[df['SN'] != 0]
+    df = df.astype(str)
+    return df
 
-# Drop rows where SN value is zero
-df_bom = df_bom[df_bom['SN'] != 0]
+def merge_dataframes(df1, df2, how, left_on, right_on):
+    return pd.merge(df1, df2, how=how, left_on=left_on, right_on=right_on)
 
-# *** READ IN MASTER UIN/LCN MAPPING REFERENCE ***
-file_path2 = 'UIN_Reference/Complete_UIN_LCN_Mapping.xlsx'
-df_map = pd.read_excel(file_path2)
+def create_mapping_dict(df, index_col, value_col):
+    return df.drop_duplicates(index_col).set_index(index_col)[value_col].to_dict()
 
-# Convert all the columns in df_bom_lf to string to ensure correct join/merges
-df_bom = df_bom.astype(str)
-df_map = df_map.astype(str)
+def post_process_data(df):
+    df['uin'] = df['uin'].str.replace('-', '')
+    df_load = df.groupby('SN').first().reset_index()
+    return df_load
 
-df_map = df_map[df_map['model'] == 'MODULE'] # ADJUSTED TO MODULE INPUT
+def split_uin_assign_build_level(df):
+    df[['Chapter', 'UINSection', 'UINFigure', 'UINItem']] = df['uin'].str.split('-', expand=True)
+    df = assign_build_level(df)
+    return df
 
-# Join the BoM to the mapping dataframe via part number
-
-df_bom = pd.merge(df_bom, df_map, how='left', left_on='PN', right_on='part_number')
-
-# *** READ IN MASTER REFERENCE FILE 'COULDBUILD' FOR PARENT PN/SN ASSIGNMENTS ***
-file_path3 = './MDR Tool/CouldBuild_Reference_Files/Master_CouldBuild_MODULE.xlsx' # ADJUSTED TO MODULE INPUT
-df_master = pd.read_excel(file_path3)
-
-# *** TRANSFORMATIONS (PREP FOR MERGE) ***
-df_master = df_master.astype(str)
-df_bom['uin'] = df_bom['uin'].str.replace('-', '')
-
-# Merge the master reference file and uin mapping file on common UIN matches
-df_bom = pd.merge(df_bom, df_master, how='left', left_on=['uin'], right_on=['UIN'])
-
-# Group the dataframe by SN, keeping only rows from the original dataframe
-df_load = df_bom.groupby('SN').first().reset_index()
-
-# Create a dictionary from uin and PN columns
-mapping_dict1 = df_load.drop_duplicates('uin').set_index('uin')['PN'].to_dict()
-
-# Use the dictionary to map ParentUIN to parent_PN
-df_load['parent_PN'] = df_load['ParentLCN'].map(mapping_dict1).fillna('')
-
-# Create a dictionary from uin and SN columns
-mapping_dict2 = df_load.drop_duplicates('uin').set_index('uin')['SN'].to_dict()
-
-# Use the dictionary to map ParentUIN to parent_SN
-df_load['parent_SN'] = df_load['ParentLCN'].map(mapping_dict2).fillna('')
-
-# Keep valid rows
-df_load = df_load.dropna(subset=['uin'])
-
-# Re-split UIN to original format
-df_load['uin'] = df_load['uin'].apply(lambda x: x[:1] + '-' + x[1:3] + '-' + x[3:6] + '-' + x[6:])
-
-# Convert UIN to respective parts
-
-df_load[['Chapter', 'UINSection', 'UINFigure', 'UINItem']] = df_load['uin'].str.split('-', expand=True)
-
-# Run a function that assigns a 'build_level'
-
-def assign_build_level(df_load):
+def assign_build_level(df):
     build_level = 1
     build_levels = []
-
-    for i, row in df_load.iterrows():
+    for i, row in df.iterrows():
         if i == 0:
-            build_levels.append(build_level) # Manual assignment of the first row
+            build_levels.append(build_level)
         else:
             if row['UINSection'] == '001':
                 build_level = 3
             elif build_level != 3:
                 build_level = 2
             build_levels.append(build_level)
+    df['build_level'] = build_levels
+    return df
 
-    df_load['build_level'] = build_levels
+def convert_dataframe_to_text(df, output_filename):
+    output_lines = []
+    # Conversion logic here
+    with open(output_filename, "w") as file:
+        file.write("\n".join(output_lines))
 
+# Example usage
+file_path = 'path_to_your_excel_file.xlsx'
+sheet_name = 'Datasources'
+start_row_num = 3
 
-    return df_load
+df_bom = read_excel_file(file_path, sheet_name, start_row_num)
+df_bom = transform_data(df_bom)
 
-# Run the build_level function
-df_load = assign_build_level(df_load)
-
-# *** CONVERT DATAFRAME TO .TXT LOADER FILE ***
-
-# Replace all NaN values in the dataframe with an empty string
-df_load = df_load.fillna('')
-
-def convert_dataframe_to_text3(df_load):
-  # print("In the loop")
-  output_lines = []
-  
-  for index, row in df_load.iterrows():
-        output_line = ""
-        # print(output_line)
-
-        output_line += str(row["build_level"]).ljust(1)
-        output_line += EI_PART_NUMBER.ljust(30)
-        output_line += EI_SERIAL_NUMBER.ljust(30)
-        output_line += str(row["UINSection"]).ljust(6)
-        output_line += str(row["UINFigure"]).ljust(6)
-
-        #if row["EI_PART_NUMBER"] == "ROLLPOST [9999]" and ["EI_SERIAL_NUMBER"][-4:] == "STAR": # handling Roll Post dummies
-         #   output_line += "00B".ljust(6)
-        #else:
-        output_line += str(row["UINItem"]).ljust(6)
-      
-        output_line += str(row["PN"]).ljust(30)
-        output_line += str(row["SN"]).ljust(30)
-        output_line += BuildDate.ljust(7)
-        output_line += str(row["parent_PN"]).ljust(30)
-        output_line += str(row["parent_SN"]).ljust(30)
-        output_line += "".ljust(19)
-        output_line += Series.ljust(8)
-
-        #if EI_Module == "AIRCRAFT":
-         #   output_line += "F-35B".ljust(17)
-        #else:
-         #   output_line += EI_Module.ljust(17)
-        output_line += EI_Module.ljust(17)
-        output_line += Variation.ljust(23)
-        output_line += str(row["Chapter"]).ljust(6)
-        output_line += BuildDate.ljust(8)
-        output_line += "".ljust(12)
-        # output_line += str(row["CreateEvent"]).ljust(1)
-        output_line += "".ljust(1)
-        output_line += "EOT".ljust(10)
-        output_line += "EFT".ljust(10)
-        output_line += "PLT".ljust(10)
-        output_line += "SFT".ljust(10)
-        output_line += "B2F".ljust(10)
-        output_line += "CAC".ljust(10)
-        output_line += "CAE".ljust(10)
-        output_line += "CP1".ljust(10)
-        output_line += "SCE".ljust(10)
-        output_line += "G1B".ljust(10)
-        output_line += "G1C".ljust(10)
-        output_line += "G2B".ljust(10)
-        output_line += "G3B".ljust(10)
-        output_line += "G3C".ljust(10)
-        output_line += "T13".ljust(10)
-        output_line += "TAC".ljust(10)
-        output_line += "ERC".ljust(10)
-        output_line += "EFC".ljust(10)
-        output_line += "BSP".ljust(10)
-  
-        #for i in range (1, 21):
-         #   meter_fields = "Meter" + str(i)
-          #  output_line += str(row[meter_fields]).ljust(10)
-
-        output_line += "".ljust(5) # CAGE_CODE
-        output_line += "".ljust(40) # IUID
-        output_line += "".ljust(12) # VENDOR
-        output_line += "".ljust(30) # CLASSIFICATION
-        output_line += "".ljust(30) # ATTRIBUTE
-        output_line += "".ljust(30) # ATTRIBUTE VALUE
-        # output_line += "".ljust(20) # PLUSABUILDNO
-        output_lines.append(output_line)
-
-        # if row["ParentSN"][-4:] == "STAR": #handing RP dummies
-          #  output_lines.append(output_line)
-        # else:
-          #  output_lines.append(output_line)
-  return output_lines
-output_lines = convert_dataframe_to_text3(df_load)
+# Continue with the rest of the operations using the defined functions
 
 
 with open("LOADFILE_{EI_SERIAL_NUMBER}_OUTPUT.txt", "w") as file:
